@@ -1,0 +1,47 @@
+{
+  "title": "Sample OB Review",
+  "vault_label": "note",
+  "items": [
+    {
+      "path": "AI/WorkBuddy/skill_upgrade_report_20260424.md",
+      "old_text": "# skill_upgrade_report_20260424\n\nTemporary report draft.\n",
+      "new_text": "# skill_upgrade_report\n\nTemporary report draft.\n",
+      "changes": [],
+      "structure": [
+        {
+          "kind": "rename",
+          "old_path": "AI/WorkBuddy/skill_upgrade_report_20260424.md",
+          "new_path": "AI/WorkBuddy/skill_upgrade_report.md",
+          "reason": "Remove random date suffix; review only."
+        }
+      ]
+    },
+    {
+      "path": "Knowledge/Network/HTTP Notes.md",
+      "old_text": "# HTTP Notes\n\nhttp is protocol\n\n- browser\n- server\n",
+      "new_text": "# HTTP Notes\n\nHTTP is an application-layer protocol.\n\n## Quick Points\n\n- Browser sends requests.\n- Server sends responses.\n\n## Related\n\n- [[Browser Basics]]\n",
+      "changes": ["content", "links"],
+      "links": {
+        "added": ["Browser Basics"],
+        "removed": [],
+        "current": [],
+        "suggested": ["Network Overview"]
+      },
+      "structure": []
+    },
+    {
+      "path": "Projects/Inbox/Network scratch.md",
+      "old_text": "# Network scratch\n\nDNS notes.\n",
+      "new_text": "# DNS Notes\n\nDNS maps names to addresses.\n",
+      "changes": ["content"],
+      "structure": [
+        {
+          "kind": "move",
+          "old_path": "Projects/Inbox/Network scratch.md",
+          "new_path": "Knowledge/Network/DNS Notes.md",
+          "reason": "Move from inbox to topic folder and rename by topic."
+        }
+      ]
+    }
+  ]
+}
