@@ -178,11 +178,17 @@ def write_review_page(out_dir: Path, index: int, item: dict[str, Any], structure
 <style>
 html,body{{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#1f2937;background:#f6f7f9}}
 body{{display:grid;grid-template-rows:auto minmax(0,1fr)}}
-.bar{{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,38vw) 30px;gap:5px;align-items:center;padding:5px 7px;background:#fff;border-bottom:1px solid #d9dee7}}
+.bar{{display:grid;grid-template-columns:minmax(0,1fr) minmax(172px,46vw) 30px;gap:5px;align-items:center;padding:5px 7px;background:#fff;border-bottom:1px solid #d9dee7}}
 .path{{font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
-.review{{display:grid;grid-template-columns:minmax(0,1fr) 28px;gap:4px}}
+.review{{display:grid;grid-template-columns:minmax(0,1fr) 28px auto;gap:4px;align-items:center}}
 .review input{{height:26px;border:1px solid #d9dee7;border-radius:6px;padding:2px 6px;font-size:12px}}
 .btn{{width:28px;height:26px;border:1px solid #d9dee7;border-radius:6px;background:#fff;cursor:pointer}}
+.btn.saved{{background:#eaf7ef;border-color:#86d19a;color:#0f5132}}
+.btn:disabled{{opacity:.58;cursor:wait}}
+.state{{font-size:11px;color:#667085;min-width:52px;white-space:nowrap}}
+.state[data-tone="error"]{{color:#b42318;font-weight:700}}
+body[data-decision="通过"] .bar{{border-left:4px solid #138a4b}}
+body[data-decision="指正"] .bar{{border-left:4px solid #a15c00}}
 .main{{overflow:auto;padding:7px;display:grid;gap:7px}}
 .panel{{background:#fff;border:1px solid #d9dee7;border-radius:7px;overflow:hidden}}
 .head{{display:flex;align-items:center;gap:6px;padding:5px 7px;border-bottom:1px solid #eef2f7;font-size:12px;font-weight:700}}
@@ -202,13 +208,13 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-word;font-family:ui-monospac
 .rendered h1,.rendered h2,.rendered h3{{margin:.3em 0}} .rendered p{{margin:.35em 0}}
 .mode-render .source{{display:none}} .mode-render .rendered{{display:block}}
 .structure-note{{background:#fff8e1;border:1px solid #f1d58a;border-radius:7px;padding:6px;font-size:12px}}
-@media(max-width:720px){{.bar{{grid-template-columns:minmax(0,1fr) minmax(110px,46vw) 28px}}.main{{padding:5px;gap:5px}}.two{{grid-template-columns:1fr}}.source{{max-height:28vh}}.diff{{max-height:48vh}}}}
+@media(max-width:720px){{.bar{{grid-template-columns:minmax(0,1fr) minmax(168px,56vw) 28px}}.state{{min-width:46px;font-size:10px}}.main{{padding:5px;gap:5px}}.two{{grid-template-columns:1fr}}.source{{max-height:28vh}}.diff{{max-height:48vh}}}}
 </style>
 </head>
 <body>
 <header class="bar">
   <div class="path">{esc(path)} <span title="content line delta">Δ{total}</span></div>
-  <div class="review"><input placeholder="指正" data-note><button class="btn" title="空白通过；有内容指正" data-submit>✎</button></div>
+  <div class="review"><input placeholder="指正" data-note><button class="btn" title="空白通过；有内容指正" data-submit>✎</button><span class="state" data-state></span></div>
   <button class="btn" title="源码/渲染" data-mode>◐</button>
 </header>
 <main class="main">
@@ -221,12 +227,65 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-word;font-family:ui-monospac
 </main>
 <script>
 const key = "ob-review:" + {json.dumps(path, ensure_ascii=False)};
+const REVIEW_PATH = {json.dumps(path, ensure_ascii=False)};
 const saved = JSON.parse(localStorage.getItem(key) || "{{}}");
 const note = document.querySelector("[data-note]");
+const state = document.querySelector("[data-state]");
 if (saved.note) note.value = saved.note;
-document.querySelector("[data-submit]").addEventListener("click", () => {{
+function flash(button) {{
+  if (!button) return;
+  const old = button.textContent || "✎";
+  button.textContent = "✓";
+  button.classList.add("saved");
+  window.setTimeout(() => {{
+    button.textContent = old;
+    button.classList.remove("saved");
+  }}, 900);
+}}
+function applyReview(data, button) {{
+  document.body.dataset.decision = data.decision || "";
+  if (state) {{
+    state.textContent = data.decision ? (data.status || "已存") + " · " + data.decision : "";
+    state.dataset.tone = data.ok === false ? "error" : "";
+  }}
+  flash(button);
+}}
+if (saved.decision) applyReview(saved, null);
+document.querySelector("[data-submit]").addEventListener("click", async event => {{
   const value = note.value.trim();
-  localStorage.setItem(key, JSON.stringify({{decision: value ? "指正" : "通过", note: value, time: new Date().toISOString()}}));
+  const button = event.currentTarget;
+  const data = {{decision: value ? "指正" : "通过", note: value, file: REVIEW_PATH, time: new Date().toISOString()}};
+  localStorage.setItem(key, JSON.stringify(data));
+  if (state) {{ state.textContent = "处理中..."; state.dataset.tone = ""; }}
+  button.disabled = true;
+  try {{
+    const response = await fetch("/api/review", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{
+        scope: "content",
+        file: REVIEW_PATH,
+        decision: data.decision,
+        note: data.note,
+        page: window.location.pathname,
+        href: window.location.href,
+        time: new Date().toISOString()
+      }})
+    }});
+    const result = await response.json().catch(() => ({{}}));
+    if (!response.ok || !result.ok) throw new Error(result.error || ("HTTP " + response.status));
+    const saved = Object.assign({{}}, data, result, {{time:new Date().toISOString()}});
+    localStorage.setItem(key, JSON.stringify(saved));
+    applyReview(saved, button);
+    if (result.next) window.setTimeout(() => {{ window.location.href = result.next; }}, 450);
+  }} catch (error) {{
+    const failed = Object.assign({{}}, data, {{ok:false, status:"失败", error:String(error && error.message ? error.message : error)}});
+    localStorage.setItem(key, JSON.stringify(failed));
+    document.body.dataset.decision = "";
+    if (state) {{ state.textContent = "失败"; state.dataset.tone = "error"; }}
+  }} finally {{
+    button.disabled = false;
+  }}
 }});
 document.querySelector("[data-mode]").addEventListener("click", () => document.body.classList.toggle("mode-render"));
 </script>
@@ -235,6 +294,10 @@ document.querySelector("[data-mode]").addEventListener("click", () => document.b
 """
     (out_dir / filename).write_text(page, encoding="utf-8")
     return filename
+
+
+def proposed_filename(index: int, path: str) -> str:
+    return f"{index:03d}-{slug(Path(path).stem)}.md"
 
 
 def build_tree(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -302,6 +365,8 @@ def write_index(out_dir: Path, manifest: dict[str, Any], prepared: list[dict[str
 html,body{{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#1f2937;background:#f6f7f9;overflow:hidden}}
 .top{{height:34px;display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:6px;align-items:center;padding:4px 8px;background:#fff;border-bottom:1px solid #d9dee7;box-sizing:border-box}}
 .btn,.sq{{height:25px;border:1px solid #d9dee7;border-radius:6px;background:#fff;cursor:pointer}}
+.btn.saved{{background:#eaf7ef;border-color:#86d19a;color:#0f5132}}
+.btn:disabled{{opacity:.58;cursor:wait}}
 .brand{{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .stat{{font-size:11px;color:#667085;border:1px solid #d9dee7;border-radius:999px;padding:2px 6px;background:#fbfcfe;white-space:nowrap}}
 iframe{{width:100%;height:calc(100vh - 34px);border:0;background:#fff}}
@@ -327,12 +392,15 @@ input{{height:26px;border:1px solid #d9dee7;border-radius:6px;padding:2px 7px;fo
 .drawer-title{{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .drawer-body{{overflow:auto;padding:8px;display:grid;gap:6px}}
 .card{{display:grid;gap:4px;border:1px solid #d9e8ff;border-radius:7px;background:#f8fbff;padding:6px}}
+.card[data-decision="通过"]{{border-left:4px solid #138a4b}}
+.card[data-decision="指正"]{{border-left:4px solid #a15c00}}
 .kind{{justify-self:start;border:1px solid #bfd7ff;background:#edf4ff;color:#0a3069;border-radius:999px;padding:2px 7px;font-size:11px;font-weight:800}}
 .paths{{display:grid;gap:2px;font-size:11px;color:#344054}}
 .paths div{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .reason{{font-size:11px;color:#667085}}
 .review{{display:grid;grid-template-columns:minmax(0,1fr) 28px auto;gap:4px;align-items:center}}
-.state{{font-size:11px;color:#667085;min-width:24px}}
+.state{{font-size:11px;color:#667085;min-width:52px;white-space:nowrap}}
+.state[data-tone="error"]{{color:#b42318;font-weight:700}}
 @media(max-width:720px){{.panel{{width:100vw;height:100vh;margin:0;border-radius:0}}.drawer{{top:auto;left:0;right:0;bottom:0;width:auto;max-height:58vh;border-radius:8px 8px 0 0}}.badges .badge:not(:first-child){{display:none}}}}
 </style>
 </head>
@@ -370,11 +438,11 @@ function showStructure(path){{
     const key = "ob-review-structure:" + path + "::" + item.kind + "::" + item.old_path + "::" + item.new_path;
     let saved = {{}};
     try{{saved = JSON.parse(localStorage.getItem(key)||"{{}}")||{{}};}}catch(_ ){{}}
-    return `<div class="card" data-key="${{esc(key)}}">
+    return `<div class="card" data-key="${{esc(key)}}" data-path="${{esc(path)}}" data-kind="${{esc(item.kind||"")}}" data-old-path="${{esc(item.old_path||"")}}" data-new-path="${{esc(item.new_path||"")}}" data-decision="${{esc(saved.decision||"")}}">
       <span class="kind">□ ${{esc(item.kind_label)}}</span>
       <div class="paths"><div title="${{esc(item.old_path)}}">旧：${{esc(item.old_path || "-")}}</div><div title="${{esc(item.new_path)}}">新：${{esc(item.new_path || "-")}}</div></div>
       ${{item.reason ? `<div class="reason">${{esc(item.reason)}}</div>` : ""}}
-      <div class="review"><input value="${{esc(saved.note||"")}}" placeholder="指正" data-note><button class="btn" data-submit>✎</button><span class="state" data-state>${{esc(saved.decision||"")}}</span></div>
+      <div class="review"><input value="${{esc(saved.note||"")}}" placeholder="指正" data-note><button class="btn" data-submit>✎</button><span class="state" data-state>${{saved.decision ? "已存 · " + esc(saved.decision) : ""}}</span></div>
     </div>`;
   }}).join("");
   drawer.hidden = false;
@@ -402,14 +470,49 @@ files.forEach(row=>{{
   const sq = row.querySelector("[data-structure-path]");
   if(sq) sq.onclick=(ev)=>{{ev.stopPropagation();showStructure(row.dataset.path);}};
 }});
-document.querySelector("[data-drawer-body]").onclick=e=>{{
+document.querySelector("[data-drawer-body]").onclick=async e=>{{
   const btn=e.target.closest("[data-submit]");
   if(!btn) return;
   const card=btn.closest(".card");
   const note=card.querySelector("[data-note]").value.trim();
   const decision=note ? "指正" : "通过";
-  localStorage.setItem(card.dataset.key, JSON.stringify({{decision,note,time:new Date().toISOString()}}));
-  card.querySelector("[data-state]").textContent=decision;
+  const state=card.querySelector("[data-state]");
+  const data={{
+    scope:"structure",
+    decision,
+    note,
+    file:card.dataset.path||"",
+    path:card.dataset.path||"",
+    kind:card.dataset.kind||"",
+    old_path:card.dataset.oldPath||"",
+    new_path:card.dataset.newPath||"",
+    page:window.location.pathname,
+    href:window.location.href,
+    time:new Date().toISOString()
+  }};
+  localStorage.setItem(card.dataset.key, JSON.stringify(data));
+  if(state){{state.textContent="处理中...";state.dataset.tone="";}}
+  btn.disabled=true;
+  try{{
+    const response=await fetch("/api/review",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(data)}});
+    const result=await response.json().catch(()=>({{}}));
+    if(!response.ok||!result.ok) throw new Error(result.error||("HTTP "+response.status));
+    const saved=Object.assign({{}},data,result,{{time:new Date().toISOString()}});
+    localStorage.setItem(card.dataset.key, JSON.stringify(saved));
+    card.dataset.decision=saved.decision||decision;
+    if(state){{state.textContent=(saved.status||"已入队")+" · "+(saved.decision||decision);state.dataset.tone="";}}
+    const old=btn.textContent || "✎";
+    btn.textContent="✓";
+    btn.classList.add("saved");
+    window.setTimeout(()=>{{btn.textContent=old;btn.classList.remove("saved");}},900);
+  }}catch(error){{
+    const failed=Object.assign({{}},data,{{ok:false,status:"失败",error:String(error&&error.message?error.message:error)}});
+    localStorage.setItem(card.dataset.key, JSON.stringify(failed));
+    card.dataset.decision="";
+    if(state){{state.textContent="失败";state.dataset.tone="error";}}
+  }}finally{{
+    btn.disabled=false;
+  }}
 }};
 </script>
 </body>
@@ -421,7 +524,10 @@ document.querySelector("[data-drawer-body]").onclick=e=>{{
 def build(manifest_path: Path, out_dir: Path) -> None:
     manifest = read_manifest(manifest_path)
     out_dir.mkdir(parents=True, exist_ok=True)
+    proposed_dir = out_dir / "proposed"
+    proposed_dir.mkdir(exist_ok=True)
     prepared: list[dict[str, Any]] = []
+    summary_items: list[dict[str, Any]] = []
     for index, item in enumerate(manifest["items"], 1):
         if not isinstance(item, dict):
             continue
@@ -431,6 +537,8 @@ def build(manifest_path: Path, out_dir: Path) -> None:
         structure = normalize_structure(item)
         added, removed, total = line_delta(old_text, new_text)
         src = write_review_page(out_dir, index, item, structure)
+        proposed_name = proposed_filename(index, path)
+        (proposed_dir / proposed_name).write_text(new_text, encoding="utf-8")
         prepared.append(
             {
                 "path": path,
@@ -444,7 +552,37 @@ def build(manifest_path: Path, out_dir: Path) -> None:
                 "structure_count": len(structure),
             }
         )
+        summary_items.append(
+            {
+                "name": Path(path).name,
+                "path": path,
+                "rel_path": path,
+                "review_html": src,
+                "proposed": f"proposed/{proposed_name}",
+                "old_chars": len(old_text),
+                "new_chars": len(new_text),
+                "added_lines": added,
+                "removed_lines": removed,
+                "line_delta": total,
+                "changes": item.get("changes") or [],
+                "links": item.get("links") or {},
+                "structure": structure,
+            }
+        )
     write_index(out_dir, manifest, prepared)
+    (out_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "title": manifest.get("title") or "OB Review",
+                "vault_label": manifest.get("vault_label") or "note",
+                "folder": manifest.get("folder") or "",
+                "items": summary_items,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     (out_dir / "review-manifest.normalized.json").write_text(json.dumps(prepared, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

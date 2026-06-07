@@ -50,9 +50,38 @@ Never write, move, rename, merge, split, delete, or repair links in the vault du
    - Normal content changes must show diff first, then old/new source or rendered panes.
    - The review input uses one icon: blank `✎` means approved; text plus `✎` means correction; no action means skipped/rejected.
 
-6. Apply later, separately.
-   - Only after user approval, apply approved changes through the user's required Obsidian write path.
+6. Serve the interactive gate when approvals should execute.
+   - Static HTML can only display/cache review state.
+   - To make `✎` real, serve the package with `scripts/ob_review_server.py`.
+   - Blank `✎` on a content file means approved: replace the old note with the proposed note through the configured Obsidian CLI wrapper, then jump to the next file.
+   - Text plus `✎` means correction: queue the correction, do not write the vault.
+   - Structure changes are review-only queue entries; do not rename, move, merge, split, or reorganize folders from this server.
+
+7. Apply structure changes later, separately.
+   - Only after explicit user approval of the queued structure plan, apply approved changes through the user's required Obsidian write path.
    - Keep backups, small batches, audit logs, and rollback metadata.
+
+## Interactive Server
+
+Run from the skill folder or pass absolute paths:
+
+```powershell
+python scripts/ob_review_server.py --root <output-dir> --host 0.0.0.0 --port 8791 --obq C:/Users/35007/Documents/Codex/tools/ob-cli-queue/obq.ps1
+```
+
+Useful options:
+
+- `--root`: review package output directory, served as the web root.
+- `--obq`: queued Obsidian CLI wrapper. The default also honors `OB_REVIEW_OBQ`.
+- `--probe-note`: note read before applying approved content; default `AI/AI入口.md`.
+- `--corrections-mirror`: optional extra `pending.jsonl` path for hourly maintainers.
+
+Server behavior:
+
+- `POST /api/review` with empty `note` and `scope:"content"` applies the proposed Markdown through CLI only.
+- `POST /api/review` with non-empty `note` queues a correction under `<output-dir>/review-corrections/pending.jsonl`.
+- Successful content applies create CLI-read backups, readbacks, hashes, and `review-apply-log/applied.jsonl`.
+- Old `localStorage` review states are UI hints only; never replay them as approvals.
 
 ## Review UI Rules
 
@@ -105,6 +134,7 @@ Run:
 
 ```powershell
 python scripts/build_ob_review_package.py --manifest examples/sample-manifest.json --out tmp/sample-review
+python -m py_compile scripts/build_ob_review_package.py scripts/ob_review_server.py
 ```
 
 Success:
@@ -113,3 +143,4 @@ Success:
 - The index contains `□` structure markers.
 - Structure files open a structure review panel and do not switch to content diff.
 - Content files show diff, old, and new panes.
+- Interactive approval requires the local server; test corrections with non-empty `note` first to avoid accidental vault writes.
