@@ -259,13 +259,63 @@ def next_review(summary: dict[str, Any], index: int, package_dir: Path | None = 
     if not isinstance(items, list):
         return None
     for nxt in items[index + 1 :]:
-        if isinstance(nxt, dict) and nxt.get("review_html"):
+        if isinstance(nxt, dict) and nxt.get("review_html") and item_needs_review(nxt):
             return str(nxt["review_html"])
     if package_dir is not None:
         for name in ("00-文件夹新旧对比.html", "00-OB-review-index.html"):
             if (package_dir / name).exists():
                 return name
     return "00-文件夹新旧对比.html"
+
+
+def item_needs_review(item: dict[str, Any]) -> bool:
+    if structure_review_count(item):
+        return True
+    changed = item.get("changed")
+    if isinstance(changed, bool) and changed:
+        return True
+    for key in ("line_delta", "added_lines", "removed_lines"):
+        try:
+            if int(item.get(key) or 0):
+                return True
+        except (TypeError, ValueError):
+            pass
+    old_chars = item.get("old_chars")
+    new_chars = item.get("new_chars")
+    if old_chars is not None and new_chars is not None:
+        try:
+            if int(old_chars) != int(new_chars):
+                return True
+        except (TypeError, ValueError):
+            pass
+    changes = item.get("changes") or []
+    if isinstance(changes, str):
+        changes = [changes]
+    if isinstance(changes, list):
+        ignored = {"", "未改", "无", "保护"}
+        return any(str(change).strip() not in ignored for change in changes)
+    return False
+
+
+def structure_review_count(item: dict[str, Any]) -> int:
+    total = 0
+    for key in ("structure", "structure_changes"):
+        value = item.get(key)
+        if isinstance(value, list):
+            total += len(value)
+    relations = item.get("structure_relations")
+    if isinstance(relations, dict):
+        try:
+            total += int(relations.get("count") or 0)
+        except (TypeError, ValueError):
+            pass
+        for key in ("renamed", "moved", "merged", "split", "folder_changed"):
+            value = relations.get(key)
+            if isinstance(value, list):
+                total += len(value)
+        if relations.get("changed") and total == 0:
+            total = 1
+    return total
 
 
 class ReviewActions:

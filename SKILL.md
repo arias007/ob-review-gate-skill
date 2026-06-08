@@ -86,6 +86,7 @@ Server behavior:
 - `POST /api/review` with non-empty `note` queues a correction under `<output-dir>/review-corrections/pending.jsonl`.
 - Successful content applies CLI-read backups, eval input files, readbacks, hashes, retry records, and `review-apply-log/applied.jsonl`.
 - Failed API requests are written to `review-apply-log/errors.jsonl` with the payload and concise error.
+- After a successful approval, automatic `next` navigation must skip unchanged/no-diff files. Keep unchanged files visible in the index/tree for manual inspection, but do not auto-jump to them. Still jump to files with `changed:true`, nonzero line deltas, real content/link/tag changes, or square-marked structure candidates.
 - Old `localStorage` review states are UI hints only; never replay them as approvals.
 
 ## Review UI Rules
