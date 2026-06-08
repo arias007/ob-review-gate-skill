@@ -44,6 +44,15 @@ def norm_text(text: str) -> str:
     return text.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def decode_cli_bytes(data: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "mbcs", "gb18030"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
 def safe_rel(rel: str) -> str:
     value = rel.replace("\\", "/").strip().strip("/")
     if not value:
@@ -81,9 +90,6 @@ def run_obq(obq: Path, args: list[str], timeout: int = 120) -> subprocess.Comple
     try:
         proc = subprocess.run(
             cmd,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
@@ -92,9 +98,11 @@ def run_obq(obq: Path, args: list[str], timeout: int = 120) -> subprocess.Comple
     except subprocess.TimeoutExpired as exc:
         raise ReviewError(f"OB CLI 超时：{' '.join(args[:2])}") from exc
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()
+        detail = (decode_cli_bytes(proc.stderr or b"") or decode_cli_bytes(proc.stdout or b"")).strip()
         raise ReviewError(f"OB CLI 失败：{' '.join(args[:2])} {detail}".strip())
-    return proc
+    proc.stdout = decode_cli_bytes(proc.stdout or b"")  # type: ignore[assignment]
+    proc.stderr = decode_cli_bytes(proc.stderr or b"")  # type: ignore[assignment]
+    return proc  # type: ignore[return-value]
 
 
 def cli_read(obq: Path, rel: str, timeout: int = 90) -> str:
@@ -188,13 +196,17 @@ def proposed_path_for(package_dir: Path, item: dict[str, Any], rel: str) -> Path
     return path
 
 
-def next_review(summary: dict[str, Any], index: int) -> str | None:
+def next_review(summary: dict[str, Any], index: int, package_dir: Path | None = None) -> str | None:
     items = summary.get("items") or []
     if not isinstance(items, list):
         return None
     for nxt in items[index + 1 :]:
         if isinstance(nxt, dict) and nxt.get("review_html"):
             return str(nxt["review_html"])
+    if package_dir is not None:
+        for name in ("00-文件夹新旧对比.html", "00-OB-review-index.html"):
+            if (package_dir / name).exists():
+                return name
     return "00-文件夹新旧对比.html"
 
 
@@ -263,14 +275,19 @@ class ReviewActions:
             old_text = cli_read(self.obq, rel, timeout=90)
             backup_file.parent.mkdir(parents=True, exist_ok=True)
             backup_file.write_text(old_text, encoding="utf-8")
-            cli_replace(self.obq, rel, new_text)
-            readback = cli_read(self.obq, rel, timeout=90)
+            already_applied = norm_text(old_text) == norm_text(new_text)
+            if already_applied:
+                readback = old_text
+            else:
+                cli_replace(self.obq, rel, new_text)
+                readback = cli_read(self.obq, rel, timeout=90)
             readback_file.parent.mkdir(parents=True, exist_ok=True)
             readback_file.write_text(readback, encoding="utf-8")
             audit.update(
                 {
                     "backup": str(backup_file),
                     "readback": str(readback_file),
+                    "already_applied": already_applied,
                     "old_sha256": sha256_text(old_text),
                     "readback_sha256": sha256_text(readback),
                     "verify_ok": norm_text(readback) == norm_text(new_text),
@@ -284,7 +301,7 @@ class ReviewActions:
             "decision": "通过",
             "status": "已写入",
             "file": rel,
-            "next": next_review(summary, index),
+            "next": next_review(summary, index, package_dir),
             "audit": audit,
         }
 
@@ -304,7 +321,7 @@ class ReviewActions:
                 item_index, item = find_item(summary, rel, review_html)
                 package_dir = str(pkg)
                 proposed = str(proposed_path_for(pkg, item, rel))
-                next_page = next_review(summary, item_index)
+                next_page = next_review(summary, item_index, pkg)
             except Exception:
                 next_page = None
             self.queue(payload, "已入队", {"package_dir": package_dir, "proposed": proposed})

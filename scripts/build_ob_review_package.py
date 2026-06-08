@@ -228,7 +228,16 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-word;font-family:ui-monospac
 <script>
 const key = "ob-review:" + {json.dumps(path, ensure_ascii=False)};
 const REVIEW_PATH = {json.dumps(path, ensure_ascii=False)};
-const saved = JSON.parse(localStorage.getItem(key) || "{{}}");
+let saved = {{}};
+try {{
+  saved = JSON.parse(localStorage.getItem(key) || "{{}}") || {{}};
+  if (saved && saved.ok === false) {{
+    localStorage.removeItem(key);
+    saved = {{}};
+  }}
+}} catch (_) {{
+  saved = {{}};
+}}
 const note = document.querySelector("[data-note]");
 const state = document.querySelector("[data-state]");
 if (saved.note) note.value = saved.note;
@@ -279,8 +288,7 @@ document.querySelector("[data-submit]").addEventListener("click", async event =>
     applyReview(saved, button);
     if (result.next) window.setTimeout(() => {{ window.location.href = result.next; }}, 450);
   }} catch (error) {{
-    const failed = Object.assign({{}}, data, {{ok:false, status:"失败", error:String(error && error.message ? error.message : error)}});
-    localStorage.setItem(key, JSON.stringify(failed));
+    localStorage.removeItem(key);
     document.body.dataset.decision = "";
     if (state) {{ state.textContent = "失败"; state.dataset.tone = "error"; }}
   }} finally {{
@@ -437,7 +445,7 @@ function showStructure(path){{
   document.querySelector("[data-drawer-body]").innerHTML = entry.items.map((item,i)=>{{
     const key = "ob-review-structure:" + path + "::" + item.kind + "::" + item.old_path + "::" + item.new_path;
     let saved = {{}};
-    try{{saved = JSON.parse(localStorage.getItem(key)||"{{}}")||{{}};}}catch(_ ){{}}
+    try{{saved = JSON.parse(localStorage.getItem(key)||"{{}}")||{{}}; if(saved&&saved.ok===false){{localStorage.removeItem(key);saved={{}};}}}}catch(_ ){{saved={{}};}}
     return `<div class="card" data-key="${{esc(key)}}" data-path="${{esc(path)}}" data-kind="${{esc(item.kind||"")}}" data-old-path="${{esc(item.old_path||"")}}" data-new-path="${{esc(item.new_path||"")}}" data-decision="${{esc(saved.decision||"")}}">
       <span class="kind">□ ${{esc(item.kind_label)}}</span>
       <div class="paths"><div title="${{esc(item.old_path)}}">旧：${{esc(item.old_path || "-")}}</div><div title="${{esc(item.new_path)}}">新：${{esc(item.new_path || "-")}}</div></div>
@@ -506,8 +514,7 @@ document.querySelector("[data-drawer-body]").onclick=async e=>{{
     btn.classList.add("saved");
     window.setTimeout(()=>{{btn.textContent=old;btn.classList.remove("saved");}},900);
   }}catch(error){{
-    const failed=Object.assign({{}},data,{{ok:false,status:"失败",error:String(error&&error.message?error.message:error)}});
-    localStorage.setItem(card.dataset.key, JSON.stringify(failed));
+    localStorage.removeItem(card.dataset.key);
     card.dataset.decision="";
     if(state){{state.textContent="失败";state.dataset.tone="error";}}
   }}finally{{
