@@ -78,9 +78,14 @@ Useful options:
 
 Server behavior:
 
-- `POST /api/review` with empty `note` and `scope:"content"` applies the proposed Markdown through CLI only.
+- `POST /api/review` with empty `note` and `scope:"content"` applies the proposed Markdown through the queued Obsidian CLI only.
+  - Do not use `create content=` plus `append inline` for review approval writes; that path can leave a note empty or partly written when CLI argument escaping fails.
+  - The server writes the proposed text to an audit-side temporary file, then calls Obsidian `eval` through `obq.ps1` so Obsidian itself reads that temporary file and runs `app.vault.modify(file, content)`.
+  - After writing, the server retries CLI readback and compares normalized text/hash before returning success and jumping to the next page.
+  - If verification fails, the server attempts to restore the backed-up old text through the same `eval` path before returning a 400.
 - `POST /api/review` with non-empty `note` queues a correction under `<output-dir>/review-corrections/pending.jsonl`.
-- Successful content applies create CLI-read backups, readbacks, hashes, and `review-apply-log/applied.jsonl`.
+- Successful content applies CLI-read backups, eval input files, readbacks, hashes, retry records, and `review-apply-log/applied.jsonl`.
+- Failed API requests are written to `review-apply-log/errors.jsonl` with the payload and concise error.
 - Old `localStorage` review states are UI hints only; never replay them as approvals.
 
 ## Review UI Rules
@@ -144,3 +149,5 @@ Success:
 - Structure files open a structure review panel and do not switch to content diff.
 - Content files show diff, old, and new panes.
 - Interactive approval requires the local server; test corrections with non-empty `note` first to avoid accidental vault writes.
+- Before asking the user to retry a failed approval, run one end-to-end server test yourself against an already-approved content item or a deliberate probe note, then verify current vault text equals the proposed text by hash.
+- The approval success response must include `ok:true`, `status:"已写入"`, `audit.verify_ok:true`, and `next` pointing to the next review page.

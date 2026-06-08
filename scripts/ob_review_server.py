@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -75,9 +76,17 @@ def is_inside(child: Path, parent: Path) -> bool:
         return False
 
 
-def run_obq(obq: Path, args: list[str], timeout: int = 120) -> subprocess.CompletedProcess[str]:
+def run_obq(
+    obq: Path,
+    args: list[str],
+    timeout: int = 120,
+    command_timeout: int | None = None,
+) -> subprocess.CompletedProcess[str]:
     if not obq.exists():
         raise ReviewError(f"OB CLI 排队入口不存在：{obq}")
+    runner_args: list[str] = []
+    if command_timeout is not None:
+        runner_args.extend(["-CommandTimeoutSeconds", str(command_timeout)])
     cmd = [
         "powershell",
         "-NoProfile",
@@ -85,6 +94,7 @@ def run_obq(obq: Path, args: list[str], timeout: int = 120) -> subprocess.Comple
         "Bypass",
         "-File",
         str(obq),
+        *runner_args,
         *args,
     ]
     try:
@@ -116,14 +126,62 @@ def ensure_cli_ready(obq: Path, probe_note: str) -> None:
         raise ReviewError(f"OB CLI 探针读取为空：{probe_note}")
 
 
-def cli_replace(obq: Path, rel: str, content: str) -> None:
-    run_obq(obq, ["create", f"path={rel}", "overwrite", "content="], timeout=90)
-    if not content:
-        return
-    chunk_size = 6000
-    for index in range(0, len(content), chunk_size):
-        chunk = content[index : index + chunk_size]
-        run_obq(obq, ["append", f"path={rel}", "inline", f"content={chunk}"], timeout=150)
+def write_text_exact(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
+def cli_replace_eval(obq: Path, rel: str, content: str, input_path: Path) -> None:
+    write_text_exact(input_path, content)
+    code = f"""
+(async () => {{
+  const fs = require('fs');
+  const targetPath = {json.dumps(rel, ensure_ascii=False)};
+  const inputPath = {json.dumps(str(input_path), ensure_ascii=False)};
+  const content = fs.readFileSync(inputPath, 'utf8').replace(/^\\uFEFF/, '');
+  const file = app.vault.getAbstractFileByPath(targetPath);
+  if (!file || file.children) {{
+    throw new Error('target note not found: ' + targetPath);
+  }}
+  await app.vault.modify(file, content);
+  const readback = await app.vault.read(file);
+  return JSON.stringify({{ ok: readback === content, path: targetPath, length: readback.length }});
+}})()
+""".strip()
+    run_obq(obq, ["eval", f"code={code}"], timeout=240, command_timeout=180)
+
+
+def cli_read_until_match(
+    obq: Path,
+    rel: str,
+    expected: str,
+    attempts: int = 8,
+    delay_seconds: float = 0.75,
+) -> tuple[str, list[dict[str, Any]]]:
+    records: list[dict[str, Any]] = []
+    last = ""
+    expected_norm = norm_text(expected)
+    for attempt in range(1, attempts + 1):
+        try:
+            current = cli_read(obq, rel, timeout=90)
+            last = current
+            ok = norm_text(current) == expected_norm
+            records.append(
+                {
+                    "attempt": attempt,
+                    "length": len(current),
+                    "sha256": sha256_text(current),
+                    "ok": ok,
+                }
+            )
+            if ok:
+                return current, records
+        except Exception as exc:
+            records.append({"attempt": attempt, "error": str(exc), "ok": False})
+        if attempt < attempts:
+            time.sleep(delay_seconds)
+    return last, records
 
 
 def append_jsonl(path: Path, data: dict[str, Any]) -> None:
@@ -259,6 +317,8 @@ class ReviewActions:
         backup_dir = self.log_root / "backup-cli-read" / run_id
         backup_file = backup_dir / rel.replace("/", os.sep)
         readback_file = self.log_root / "readback-cli-read" / run_id / rel.replace("/", os.sep)
+        input_file = self.log_root / "eval-input" / run_id / rel.replace("/", os.sep)
+        restore_readback_file = self.log_root / "restore-readback-cli-read" / run_id / rel.replace("/", os.sep)
         audit = {
             "time": now_iso(),
             "run_id": run_id,
@@ -274,28 +334,59 @@ class ReviewActions:
             ensure_cli_ready(self.obq, self.probe_note)
             old_text = cli_read(self.obq, rel, timeout=90)
             backup_file.parent.mkdir(parents=True, exist_ok=True)
-            backup_file.write_text(old_text, encoding="utf-8")
+            write_text_exact(backup_file, old_text)
             already_applied = norm_text(old_text) == norm_text(new_text)
             if already_applied:
                 readback = old_text
+                readback_attempts = [
+                    {
+                        "attempt": 1,
+                        "length": len(readback),
+                        "sha256": sha256_text(readback),
+                        "ok": True,
+                    }
+                ]
             else:
-                cli_replace(self.obq, rel, new_text)
-                readback = cli_read(self.obq, rel, timeout=90)
+                cli_replace_eval(self.obq, rel, new_text, input_file)
+                readback, readback_attempts = cli_read_until_match(self.obq, rel, new_text)
             readback_file.parent.mkdir(parents=True, exist_ok=True)
-            readback_file.write_text(readback, encoding="utf-8")
+            write_text_exact(readback_file, readback)
+            verify_ok = norm_text(readback) == norm_text(new_text)
             audit.update(
                 {
                     "backup": str(backup_file),
                     "readback": str(readback_file),
+                    "eval_input": str(input_file),
                     "already_applied": already_applied,
                     "old_sha256": sha256_text(old_text),
                     "readback_sha256": sha256_text(readback),
-                    "verify_ok": norm_text(readback) == norm_text(new_text),
+                    "readback_attempts": readback_attempts,
+                    "verify_ok": verify_ok,
                 }
             )
+            if not verify_ok:
+                audit["restore_attempted"] = True
+                try:
+                    restore_input_file = self.log_root / "restore-eval-input" / run_id / rel.replace("/", os.sep)
+                    cli_replace_eval(self.obq, rel, old_text, restore_input_file)
+                    restored, restore_attempts = cli_read_until_match(self.obq, rel, old_text)
+                    restore_readback_file.parent.mkdir(parents=True, exist_ok=True)
+                    write_text_exact(restore_readback_file, restored)
+                    audit.update(
+                        {
+                            "restore_input": str(restore_input_file),
+                            "restore_readback": str(restore_readback_file),
+                            "restore_readback_sha256": sha256_text(restored),
+                            "restore_attempts": restore_attempts,
+                            "restore_ok": norm_text(restored) == norm_text(old_text),
+                        }
+                    )
+                except Exception as exc:
+                    audit.update({"restore_ok": False, "restore_error": str(exc)})
             append_jsonl(self.log_root / "applied.jsonl", audit)
         if not audit["verify_ok"]:
-            raise ReviewError(f"写入后校验不一致：{rel}")
+            restored = "，已恢复旧稿" if audit.get("restore_ok") else "，恢复旧稿失败"
+            raise ReviewError(f"写入后校验不一致：{rel}{restored}")
         return {
             "ok": True,
             "decision": "通过",
@@ -328,6 +419,15 @@ class ReviewActions:
             return {"ok": True, "decision": "指正", "status": "已入队", "next": next_page}
         return self.apply_content(payload)
 
+    def log_error(self, payload: dict[str, Any] | None, error: str) -> None:
+        record = {
+            "time": now_iso(),
+            "source": "ob-review-server",
+            "error": error,
+            "payload": payload or {},
+        }
+        append_jsonl(self.log_root / "errors.jsonl", record)
+
 
 class ReviewHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: Any, root: Path, actions: ReviewActions, **kwargs: Any) -> None:
@@ -349,16 +449,23 @@ class ReviewHandler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path != "/api/review":
             self.send_error(404)
             return
+        payload: dict[str, Any] | None = None
         try:
             length = int(self.headers.get("Content-Length") or "0")
             raw = self.rfile.read(length)
-            payload = json.loads(raw.decode("utf-8-sig"))
+            parsed = json.loads(raw.decode("utf-8-sig"))
+            payload = parsed if isinstance(parsed, dict) else None
             if not isinstance(payload, dict):
                 raise ReviewError("请求格式错误")
             result = self.actions.handle(payload)
             self.write_json(200, result)
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
+            try:
+                self.actions.log_error(payload, message)
+            except Exception:
+                pass
+            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} api-error {message}", flush=True)
             self.write_json(400, {"ok": False, "error": message})
 
     def write_json(self, status: int, data: dict[str, Any]) -> None:
