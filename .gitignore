@@ -1,5 +1,10 @@
 tmp/
 __pycache__/
 *.pyc
+outputs/
+reports/
+review-corrections/
+review-apply-log/
+*.log
 .DS_Store
 Thumbs.db

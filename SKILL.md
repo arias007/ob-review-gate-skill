@@ -66,14 +66,14 @@ Never write, move, rename, merge, split, delete, or repair links in the vault du
 Run from the skill folder or pass absolute paths:
 
 ```powershell
-python scripts/ob_review_server.py --root <output-dir> --host 0.0.0.0 --port 8791 --obq C:/Users/35007/Documents/Codex/tools/ob-cli-queue/obq.ps1
+python scripts/ob_review_server.py --root <output-dir> --host 0.0.0.0 --port 8791 --obq <path-to-obq.ps1>
 ```
 
 Useful options:
 
 - `--root`: review package output directory, served as the web root.
 - `--obq`: queued Obsidian CLI wrapper. The default also honors `OB_REVIEW_OBQ`.
-- `--probe-note`: note read before applying approved content; default `AI/AI入口.md`.
+- `--probe-note`: optional note read before applying approved content. The default also honors `OB_REVIEW_PROBE_NOTE`.
 - `--corrections-mirror`: optional extra `pending.jsonl` path for hourly maintainers.
 
 Server behavior:

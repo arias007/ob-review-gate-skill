@@ -18,10 +18,8 @@ from urllib.parse import unquote, urlparse
 
 
 DEFAULT_OUTPUTS = Path.cwd()
-DEFAULT_OBQ = Path(
-    os.environ.get("OB_REVIEW_OBQ", r"C:\Users\35007\Documents\Codex\tools\ob-cli-queue\obq.ps1")
-)
-DEFAULT_PROBE_NOTE = os.environ.get("OB_REVIEW_PROBE_NOTE", "AI/AI入口.md")
+DEFAULT_OBQ = Path(os.environ.get("OB_REVIEW_OBQ", "obq.ps1"))
+DEFAULT_PROBE_NOTE = os.environ.get("OB_REVIEW_PROBE_NOTE", "")
 DEFAULT_CORRECTIONS_MIRROR = os.environ.get("OB_REVIEW_CORRECTIONS_MIRROR", "")
 
 
@@ -121,9 +119,10 @@ def cli_read(obq: Path, rel: str, timeout: int = 90) -> str:
 
 def ensure_cli_ready(obq: Path, probe_note: str) -> None:
     run_obq(obq, ["version"], timeout=45)
-    probe = cli_read(obq, probe_note, timeout=60)
-    if not probe.strip():
-        raise ReviewError(f"OB CLI 探针读取为空：{probe_note}")
+    if probe_note:
+        probe = cli_read(obq, probe_note, timeout=60)
+        if not probe.strip():
+            raise ReviewError(f"OB CLI 探针读取为空：{probe_note}")
 
 
 def write_text_exact(path: Path, text: str) -> None:
@@ -537,8 +536,17 @@ def main() -> None:
     parser.add_argument("--root", default=str(DEFAULT_OUTPUTS), type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8791, type=int)
-    parser.add_argument("--obq", default=str(DEFAULT_OBQ), type=Path, help="Path to the queued Obsidian CLI wrapper.")
-    parser.add_argument("--probe-note", default=DEFAULT_PROBE_NOTE, help="Note to read before applying approved content.")
+    parser.add_argument(
+        "--obq",
+        default=str(DEFAULT_OBQ),
+        type=Path,
+        help="Path to the queued Obsidian CLI wrapper. Can also be set with OB_REVIEW_OBQ.",
+    )
+    parser.add_argument(
+        "--probe-note",
+        default=DEFAULT_PROBE_NOTE,
+        help="Optional note to read before applying approved content. Can also be set with OB_REVIEW_PROBE_NOTE.",
+    )
     parser.add_argument(
         "--corrections-mirror",
         default=DEFAULT_CORRECTIONS_MIRROR,
